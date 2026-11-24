@@ -1,12 +1,16 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# --- GLFW (window + input). Vulkan-ready: we create windows with GLFW_NO_API ---
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4)
-FetchContent_MakeAvailable(glfw)
+if(NOT ANDROID)
+    # --- GLFW (desktop window + input). Vulkan-ready: windows use GLFW_NO_API ---
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.4)
+    FetchContent_MakeAvailable(glfw)
+endif()
+
+# Android uses ANativeWindow + android_native_app_glue (see Engine/Source/Runtime/Platform).
 
 # Later phases (uncomment as you reach them):
 # FetchContent_Declare(JoltPhysics GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git GIT_TAG v5.2.0 SOURCE_SUBDIR Build)

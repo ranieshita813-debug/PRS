@@ -1,4 +1,8 @@
 #include "PRS/Platform/Window.h"
+#include "PRS/Core/Platform.h"
+
+#if !defined(PRS_PLATFORM_ANDROID)
+
 #include "PRS/Core/Assert.h"
 #include <GLFW/glfw3.h>
 
@@ -39,3 +43,5 @@ void Window::PollEvents()
 bool Window::ShouldClose() const { return glfwWindowShouldClose(static_cast<GLFWwindow*>(m_handle)) != 0; }
 void Window::RequestClose() { glfwSetWindowShouldClose(static_cast<GLFWwindow*>(m_handle), GLFW_TRUE); }
 } // namespace PRS
+
+#endif // !PRS_PLATFORM_ANDROID

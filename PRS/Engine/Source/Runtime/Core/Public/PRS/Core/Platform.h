@@ -1,5 +1,7 @@
 #pragma once
-#if defined(_WIN32)
+#if defined(__ANDROID__)
+  #define PRS_PLATFORM_ANDROID 1
+#elif defined(_WIN32)
   #define PRS_PLATFORM_WINDOWS 1
 #elif defined(__APPLE__)
   #define PRS_PLATFORM_MACOS 1

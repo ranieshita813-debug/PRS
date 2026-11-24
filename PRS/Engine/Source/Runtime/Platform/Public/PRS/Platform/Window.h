@@ -24,7 +24,9 @@ public:
     void RequestClose();
     u32 Width() const { return m_width; }
     u32 Height() const { return m_height; }
-    // Opaque native handle (GLFWwindow*). Used later by the Vulkan swapchain.
+    f32 AspectRatio() const { return m_height == 0 ? 1.0f : static_cast<f32>(m_width) / static_cast<f32>(m_height); }
+    // Opaque native handle. Desktop: GLFWwindow*. Android: ANativeWindow*.
+    // Used by the Vulkan swapchain, and on Android by the software presenter.
     void* NativeHandle() const { return m_handle; }
 
 private:

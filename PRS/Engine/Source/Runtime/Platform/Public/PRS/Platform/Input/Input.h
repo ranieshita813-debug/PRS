@@ -14,9 +14,18 @@ enum class Key : i32
     LeftShift = 340, LeftControl = 341
 };
 
+// Values match GLFW mouse button codes. Touch-only platforms always report "up".
+enum class MouseButton : i32
+{
+    Left = 0,
+    Right = 1,
+    Middle = 2
+};
+
 namespace Input
 {
 bool IsKeyDown(const Window& window, Key key);
+bool IsMouseDown(const Window& window, MouseButton button = MouseButton::Left);
 void GetMousePosition(const Window& window, double& x, double& y);
 } // namespace Input
 } // namespace PRS

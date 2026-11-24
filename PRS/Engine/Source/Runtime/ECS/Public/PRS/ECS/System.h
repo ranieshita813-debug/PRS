@@ -1,10 +1,34 @@
 #pragma once
-// PRS::ECS :: System  (L2)
-// STUB: replace with the real implementation when you reach this phase (see Docs/Roadmap.md).
+#include "PRS/Core/Containers/Containers.h"
+#include "PRS/ECS/World.h"
+
 namespace PRS::ECS
 {
-struct System
+// Fixed stages every frame runs through, in order.
+enum class SystemStage : u8
 {
-    static constexpr const char* Name() { return "ECS/System"; }
+    PreUpdate = 0,
+    Update,
+    PostUpdate,
+    Render,
+    Count
+};
+
+struct SystemContext
+{
+    World& world;
+    f32 deltaTime = 0.0f;
+    f32 totalTime = 0.0f;
+    u64 frame = 0;
+};
+
+// Interface for a named, stateful system. Function systems (lambda based) can be
+// registered directly on the scheduler; this is for systems that own data.
+class System
+{
+public:
+    virtual ~System() = default;
+    virtual const char* Name() const { return "System"; }
+    virtual void OnUpdate(SystemContext& context) = 0;
 };
 } // namespace PRS::ECS

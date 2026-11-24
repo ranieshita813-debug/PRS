@@ -1,0 +1,17 @@
+# prs_add_module(<Name> [DEPS_PUBLIC ...] [DEPS_PRIVATE ...])
+# Creates target PRS_<Name> (alias PRS::<Name>) from Public/ and Private/.
+# The DEPS lists ARE the layering rules: if a module is not listed, it cannot be included.
+function(prs_add_module NAME)
+    cmake_parse_arguments(M "" "" "DEPS_PUBLIC;DEPS_PRIVATE" ${ARGN})
+    file(GLOB_RECURSE SRC CONFIGURE_DEPENDS Private/*.cpp)
+    file(GLOB_RECURSE HDR CONFIGURE_DEPENDS Public/*.h)
+    add_library(PRS_${NAME} STATIC ${SRC} ${HDR})
+    add_library(PRS::${NAME} ALIAS PRS_${NAME})
+    target_include_directories(PRS_${NAME} PUBLIC Public PRIVATE Private)
+    target_link_libraries(PRS_${NAME} PUBLIC ${M_DEPS_PUBLIC} PRIVATE ${M_DEPS_PRIVATE})
+    if(MSVC)
+        target_compile_options(PRS_${NAME} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PRS_${NAME} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()

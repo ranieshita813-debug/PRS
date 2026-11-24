@@ -1,0 +1,10 @@
+#pragma once
+// PRS::Audio :: Occlusion  (L4)
+// STUB: replace with the real implementation when you reach this phase (see Docs/Roadmap.md).
+namespace PRS::Audio
+{
+struct Occlusion
+{
+    static constexpr const char* Name() { return "Audio/Occlusion"; }
+};
+} // namespace PRS::Audio

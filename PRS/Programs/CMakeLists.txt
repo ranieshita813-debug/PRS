@@ -1,0 +1,7 @@
+add_subdirectory(EditorApp)
+add_subdirectory(AssetCooker)
+add_subdirectory(ShaderCompiler)
+add_subdirectory(ReflectionGenerator)
+add_subdirectory(PakTool)
+add_subdirectory(CrashReporter)
+add_subdirectory(HeadlessServer)

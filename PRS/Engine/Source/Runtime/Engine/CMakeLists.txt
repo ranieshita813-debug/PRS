@@ -1,0 +1,1 @@
+prs_add_module(Engine DEPS_PUBLIC PRS::Core PRS::Platform PRS::Jobs PRS::VFS PRS::RHI PRS::ECS PRS::Assets PRS::Renderer PRS::Scene PRS::Physics PRS::Animation PRS::Audio PRS::AI PRS::World PRS::Scripting PRS::Network PRS::UI PRS::Gameplay)

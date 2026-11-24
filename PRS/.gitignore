@@ -1,0 +1,9 @@
+Intermediate/
+Saved/
+build/
+.vs/
+.vscode/
+.idea/
+*.user
+*.pak
+compile_commands.json

@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "configurePresets": [
+    { "name": "debug",    "generator": "Ninja", "binaryDir": "${sourceDir}/Intermediate/debug",    "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "release",  "generator": "Ninja", "binaryDir": "${sourceDir}/Intermediate/release",  "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "profile",  "generator": "Ninja", "binaryDir": "${sourceDir}/Intermediate/profile",  "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "profile", "configurePreset": "profile" }
+  ]
+}

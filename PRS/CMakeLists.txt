@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.20)
+project(PRS VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+option(PRS_BUILD_TESTS "Build unit tests" ON)
+option(PRS_BUILD_PROGRAMS "Build tools (cooker, shader compiler...)" ON)
+
+include(CMake/PRSModule.cmake)
+include(CMake/Dependencies.cmake)
+
+add_subdirectory(Engine/Source/Runtime)
+add_subdirectory(Engine/Source/Developer)
+add_subdirectory(Engine/Source/Editor)
+if(PRS_BUILD_PROGRAMS)
+    add_subdirectory(Programs)
+endif()
+add_subdirectory(Games/MyOpenWorld)
+if(PRS_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(Tests)
+endif()

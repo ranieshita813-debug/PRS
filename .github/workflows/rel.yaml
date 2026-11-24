@@ -1,0 +1,65 @@
+name: Release
+
+# Create a release by pushing a tag:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libx11-dev xorg-dev libgl1-mesa-dev
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_WAYLAND=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ -d build/bin/Release ]; then SRC=build/bin/Release; else SRC=build/bin; fi
+          cp -r "$SRC"/. dist/
+          cp -r Games/MyOpenWorld/Config dist/Config
+          cp README.md dist/
+          cd dist && 7z a ../PRS-${{ github.ref_name }}-${{ runner.os }}.zip . > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ runner.os }}
+          path: PRS-${{ github.ref_name }}-${{ runner.os }}.zip
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: packages
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*.zip
+          generate_release_notes: true

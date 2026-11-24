@@ -1,0 +1,89 @@
+name: Release
+
+# Create a release by pushing a tag: git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libx11-dev xorg-dev libgl1-mesa-dev
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cmake -S PRS -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_WAYLAND=OFF
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cmake -S PRS -B build -DCMAKE_CONFIGURATION_TYPES=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+
+          if [ -d build/bin/Release ]; then
+            SRC=build/bin/Release
+          else
+            SRC=build/bin
+          fi
+
+          cp -r "$SRC"/. dist/
+          cp -r PRS/Games/MyOpenWorld/Config dist/Config
+          cp PRS/README.md dist/
+
+          cd dist
+          7z a ../PRS-${{ github.ref_name }}-${{ runner.os }}.zip . > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ runner.os }}
+          path: PRS-${{ github.ref_name }}-${{ runner.os }}.zip
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: packages
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*.zip
+          generate_release_notes: true

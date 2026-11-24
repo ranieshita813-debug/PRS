@@ -6,6 +6,7 @@ add_executable(PRS_UnitTests
     Unit/SceneTests.cpp
     Unit/PhysicsTests.cpp
     Unit/AnimationTests.cpp
+    Unit/AssetTests.cpp
     Unit/JobTests.cpp
     Unit/UITests.cpp)
 target_link_libraries(PRS_UnitTests PRIVATE
@@ -15,5 +16,6 @@ target_link_libraries(PRS_UnitTests PRIVATE
     PRS::Scene
     PRS::Physics
     PRS::Animation
+    PRS::Assets
     PRS::UI)
 add_test(NAME UnitTests COMMAND PRS_UnitTests)

@@ -19,8 +19,10 @@ ctest --test-dir Intermediate/debug
 
 Controls in the sample game: **ESC** quits, **WASD** moves the camera.
 
-The sample renders a lit ground plane and a spinning cube through the Vulkan
-forward renderer. Shaders are compiled from `Engine/Shaders/*.glsl` by
+The sample renders a lit scene through the Vulkan forward renderer: a textured
+ground plane, a spinning cube and a textured sphere loaded from
+`Games/MyOpenWorld/Assets/Models/sphere.obj` (OBJ + MTL + TGA). Shaders are
+compiled from `Engine/Shaders/*.glsl` by
 `glslangValidator` when the Vulkan SDK is installed, otherwise the prebuilt
 SPIR-V in `Engine/Shaders/Compiled` is copied next to the binaries.
 
@@ -38,8 +40,9 @@ SPIR-V in `Engine/Shaders/Compiled` is copied next to the binaries.
 | Engine (Application, fixed-timestep loop) | implemented |
 | UI (touch widgets, layout, scrolling, draw list, software rasterizer) | implemented |
 | RHI (Vulkan 1.1 backend: instance/device, swapchain, buffers, textures, pipelines, command lists, fences) | implemented |
-| Renderer (forward pass: camera, directional light, mesh draws, depth buffer, present) | implemented, see [Docs/Rendering.md](Docs/Rendering.md) |
-| Assets / Audio / Scripting / Network / World / AI | compiling stubs, see `Docs/Roadmap.md` |
+| Renderer (forward pass: camera, directional light, textured materials, mesh draws, depth buffer, present) | implemented, see [Docs/Rendering.md](Docs/Rendering.md) |
+| Assets (OBJ/MTL meshes, TGA/BMP textures, search-path cache) | implemented (textures/meshes), cooker and glTF still stubs |
+| Audio / Scripting / Network / World / AI | compiling stubs, see `Docs/Roadmap.md` |
 
 ## Runtime quick start
 
@@ -74,8 +77,8 @@ made inside a system go through `ECS::Commands` and are flushed by the scheduler
 `Engine/Source/Runtime/Platform/Private/Android` and a Gradle project in
 `Platforms/Android`. See [Docs/Android.md](Docs/Android.md).
 
-Because the Vulkan renderer is still a stub, the interface is rasterised on the
-CPU and presented through `ANativeWindow_lock()` on device. To see it on a
+The mobile shell does not create a Vulkan device yet, so its interface is
+rasterised on the CPU and presented through `ANativeWindow_lock()` on device. To see it on a
 desktop without a phone:
 
 ```

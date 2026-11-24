@@ -9,7 +9,8 @@
 2. **Phase 2**: ECS, Assets + simple cooker, Scene, Editor basics (ImGui).
    - ECS done: entity generations, dense component pools, views, deferred commands, staged scheduler.
    - Scene done: hierarchy, camera/light/renderable components, text serializer, prefabs.
-   - Assets/cooker and the editor remain.
+   - Assets done: OBJ/MTL mesh import, TGA/BMP texture decoding, search-path cache
+     feeding the renderer's materials. glTF/PNG support, the cooker and the editor remain.
 3. **Phase 3**: Physics (Jolt), Animation, Audio, Scripting, small playable game.
    - Physics done as a self-contained solver (gravity, sphere/box contacts, friction,
      sleeping, raycast, fixed step). Jolt integration still planned for large scenes.

@@ -1,0 +1,7 @@
+# PRS sample material
+newmtl checker
+Kd 1.000 1.000 1.000
+Ks 0.350 0.350 0.350
+Ns 64
+d 1.0
+map_Kd ../Textures/checker.tga

@@ -1,6 +1,7 @@
 #include "PRS/Renderer/Renderer.h"
 #include "PRS/Core/Log.h"
 #include "PRS/Core/Math/Matrix.h"
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -53,6 +54,15 @@ bool FileExists(const std::string& path)
     std::ifstream file(path, std::ios::binary);
     return file.good();
 }
+
+std::string MaterialKey(const Assets::MaterialData& data)
+{
+    char header[96];
+    std::snprintf(header, sizeof(header), "%.3f_%.3f_%.3f_%.3f_%.3f_%.1f|", data.baseColor.x,
+                  data.baseColor.y, data.baseColor.z, data.baseColor.w, data.specularColor.x,
+                  data.shininess);
+    return std::string(header) + data.baseColorTexture;
+}
 } // namespace
 
 Renderer::Renderer() = default;
@@ -82,6 +92,15 @@ void Renderer::SetShaderDirectory(std::string directory)
     }
 }
 
+void Renderer::AddDefaultSearchPaths()
+{
+    m_assets.AddSearchPath("Assets");
+    m_assets.AddSearchPath("../Assets");
+    m_assets.AddSearchPath("../../Assets");
+    m_assets.AddSearchPath("Games/MyOpenWorld/Assets");
+    m_assets.AddSearchPath("../Games/MyOpenWorld/Assets");
+}
+
 bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
                           const RendererConfig& config)
 {
@@ -89,7 +108,8 @@ bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
     m_device = &device;
     m_swapchain = &swapchain;
     m_config = config;
-    m_lastAmbient = config.ambientIntensity;
+
+    if (m_assets.SearchPaths().empty()) AddDefaultSearchPaths();
 
     m_vertexShaderPath = FindShader("forward.vert.spv");
     m_fragmentShaderPath = FindShader("forward.frag.spv");
@@ -97,8 +117,8 @@ bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
     if (!CreatePipeline()) return false;
     if (!CreateFrameResources()) return false;
 
-    // A 1x1 white texture keeps the combined image sampler binding valid for
-    // pipelines that eventually sample material textures.
+    // A 1x1 white texture keeps the material binding valid for untextured
+    // materials, so the shader always samples something.
     RHI::TextureDesc whiteDesc;
     whiteDesc.size = {1, 1};
     whiteDesc.format = RHI::Format::RGBA8Unorm;
@@ -108,14 +128,14 @@ bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
     const u8 white[4] = {255, 255, 255, 255};
     if (m_whiteTexture) m_whiteTexture->Upload(white, sizeof(white));
 
-    RHI::SamplerDesc samplerDesc;
-    samplerDesc.addressU = RHI::AddressMode::ClampToEdge;
-    samplerDesc.addressV = RHI::AddressMode::ClampToEdge;
-    samplerDesc.addressW = RHI::AddressMode::ClampToEdge;
-    m_defaultSampler = device.CreateSampler(samplerDesc);
+    m_defaultSampler = device.CreateSampler(RHI::SamplerDesc{});
 
     if (m_frameHeap && m_whiteTexture && m_defaultSampler)
         m_frameHeap->SetCombinedImageSampler(1, *m_whiteTexture, *m_defaultSampler);
+
+    Assets::MaterialData defaultMaterial;
+    m_defaultMaterial = GetOrCreateMaterial(defaultMaterial);
+    if (m_defaultMaterial == nullptr) return false;
 
     m_initialized = true;
     PRS_INFO("Renderer ready: %s, %s shaders", device.BackendName(), m_vertexShaderPath.c_str());
@@ -177,6 +197,10 @@ void Renderer::Shutdown()
 {
     // The swapchain and device may already be gone; drop GPU objects first.
     m_meshes.clear();
+    m_materials.clear();
+    m_missingMeshes.clear();
+    m_defaultMaterial = nullptr;
+    m_assets.Clear();
     m_commandList.reset();
     m_frameHeap.reset();
     m_cameraBuffer.reset();
@@ -200,6 +224,58 @@ bool Renderer::Resize(u32 width, u32 height)
     // The pipeline is tied to the swapchain's formats; recreate it if they changed.
     if (!CreatePipeline()) return false;
     return true;
+}
+
+Material* Renderer::CreateMaterial(const Assets::MaterialData& data, const String& key)
+{
+    auto material = MakeScope<Material>();
+    material->baseColor = data.baseColor;
+    material->specular = data.specularColor;
+    material->shininess = data.shininess;
+    material->albedoPath = data.baseColorTexture;
+
+    const Assets::Image* image =
+        data.HasTexture() ? m_assets.LoadImage(data.baseColorTexture) : nullptr;
+    if (image != nullptr && image->IsValid())
+    {
+        RHI::TextureDesc desc;
+        desc.size = {image->width, image->height};
+        desc.format = RHI::Format::RGBA8Unorm;
+        desc.usage = RHI::TextureUsage::Sampled;
+        desc.debugName = "Albedo";
+        material->albedo = m_device->CreateTexture(desc);
+        if (material->albedo) material->albedo->Upload(image->pixels.data(), image->SizeBytes());
+    }
+
+    material->heap = m_device->CreateDescriptorHeap();
+    if (material->heap)
+    {
+        material->heap->SetUniformBuffer(0, *m_cameraBuffer, 0, sizeof(CameraData));
+        RHI::Texture* texture = material->albedo ? material->albedo.get() : m_whiteTexture.get();
+        if (texture != nullptr && m_defaultSampler != nullptr)
+            material->heap->SetCombinedImageSampler(1, *texture, *m_defaultSampler);
+    }
+
+    Material* stored = material.get();
+    m_materials.emplace(key, std::move(material));
+    return stored;
+}
+
+Material* Renderer::GetOrCreateMaterial(const Assets::MaterialData& data)
+{
+    const String key = MaterialKey(data);
+    const auto existing = m_materials.find(key);
+    if (existing != m_materials.end()) return existing->second.get();
+    return CreateMaterial(data, key);
+}
+
+Material* Renderer::GetOrCreateTextureMaterial(std::string_view albedoPath)
+{
+    if (albedoPath.empty()) return m_defaultMaterial;
+    Assets::MaterialData data;
+    data.baseColor = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    data.baseColorTexture = String(albedoPath);
+    return GetOrCreateMaterial(data);
 }
 
 Mesh& Renderer::CreateMesh(std::string_view name, ConstSpan<Vertex> vertices,
@@ -226,26 +302,72 @@ Mesh& Renderer::CreateMesh(std::string_view name, ConstSpan<Vertex> vertices,
         mesh->indexBuffer = m_device->CreateBuffer(indexDesc);
         if (mesh->indexBuffer) mesh->indexBuffer->Write(indices.data(), indexDesc.size);
         mesh->indexCount = static_cast<u32>(indices.size());
+        mesh->parts.push_back({0, mesh->indexCount, m_defaultMaterial});
     }
 
-    Mesh& stored = *(mesh.get());
-    m_meshes[std::string(name)] = std::move(mesh);
+    Mesh& stored = *mesh;
+    m_meshes[String(name)] = std::move(mesh);
     return stored;
+}
+
+Mesh& Renderer::CreateMeshFromData(std::string_view name, const Assets::MeshData& data)
+{
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+    Array<MeshPart> parts;
+
+    for (const Assets::MeshPart& part : data.parts)
+    {
+        if (part.vertices.empty() || part.indices.empty()) continue;
+
+        MeshPart gpuPart;
+        gpuPart.firstIndex = static_cast<u32>(indices.size());
+        gpuPart.indexCount = static_cast<u32>(part.indices.size());
+        gpuPart.material = GetOrCreateMaterial(part.material);
+
+        const u32 baseVertex = static_cast<u32>(vertices.size());
+        vertices.reserve(vertices.size() + part.vertices.size());
+        for (const Assets::MeshVertex& vertex : part.vertices)
+            vertices.push_back({vertex.position, vertex.normal, vertex.uv});
+        indices.reserve(indices.size() + part.indices.size());
+        for (u32 index : part.indices) indices.push_back(baseVertex + index);
+
+        parts.push_back(gpuPart);
+    }
+
+    Mesh& mesh = CreateMesh(name, vertices, indices);
+    mesh.parts = std::move(parts);
+    return mesh;
 }
 
 Mesh& Renderer::GetOrCreateMesh(std::string_view name)
 {
-    const std::string key(name);
+    const String key(name);
     const auto existing = m_meshes.find(key);
     if (existing != m_meshes.end()) return *existing->second;
 
     std::vector<Vertex> vertices;
     std::vector<u32> indices;
-    if (key == "plane")
-        BuildPlane(vertices, indices);
-    else
-        BuildCube(vertices, indices);
 
+    if (key == "cube")
+    {
+        BuildCube(vertices, indices);
+        return CreateMesh(key, vertices, indices);
+    }
+    if (key == "plane")
+    {
+        BuildPlane(vertices, indices);
+        return CreateMesh(key, vertices, indices);
+    }
+
+    if (const Assets::MeshData* data = m_assets.LoadMesh(name))
+        return CreateMeshFromData(name, *data);
+
+    if (m_missingMeshes.insert(key).second)
+        PRS_WARN("Renderer: mesh '%s' not found through the asset paths, using a cube",
+                 key.c_str());
+
+    BuildCube(vertices, indices);
     return CreateMesh(key, vertices, indices);
 }
 
@@ -334,33 +456,47 @@ void Renderer::Render(Scene::Scene& scene, ECS::Entity cameraEntity, f32 elapsed
     commands.BeginRenderPass(pass);
 
     commands.SetPipeline(*m_pipeline);
-    commands.SetDescriptorHeap(*m_frameHeap);
 
     scene.World().Query<Sc::Transform, Sc::MeshRenderer>().ForEach(
         [&](ECS::Entity entity, Sc::Transform&, Sc::MeshRenderer& meshRenderer) {
             if (!meshRenderer.visible) return;
 
             Mesh& mesh = GetOrCreateMesh(meshRenderer.mesh);
-            if (!mesh.vertexBuffer || !mesh.indexBuffer || mesh.indexCount == 0) return;
+            if (!mesh.vertexBuffer || !mesh.indexBuffer || mesh.parts.empty()) return;
 
-            ObjectData object{};
-            object.model = scene.WorldMatrix(entity);
+            Material* overrideMaterial = meshRenderer.material.empty()
+                                             ? nullptr
+                                             : GetOrCreateTextureMaterial(meshRenderer.material);
 
-            // Vary colour per object so untextured scenes still read as 3D.
-            const f32 tint = static_cast<f32>((entity.index * 37u) % 100u) / 100.0f;
-            object.baseColor = Vec4(0.35f + tint * 0.55f, 0.45f + (1.0f - tint) * 0.45f, 0.75f,
-                                    1.0f);
-            object.params = Vec4(48.0f, 0.35f, 0.0f, 0.0f);
-
-            commands.PushConstants(&object, sizeof(ObjectData));
-            commands.SetVertexBuffer(*mesh.vertexBuffer);
-            commands.SetIndexBuffer(*mesh.indexBuffer);
-            commands.DrawIndexed(mesh.indexCount);
-
-            ++m_stats.drawCalls;
             ++m_stats.meshes;
-            m_stats.triangles += mesh.indexCount / 3;
+            for (const MeshPart& part : mesh.parts)
+            {
+                if (part.indexCount == 0) continue;
+                Material* material = overrideMaterial ? overrideMaterial : part.material;
+                if (material == nullptr) material = m_defaultMaterial;
+
+                ObjectData object{};
+                object.model = scene.WorldMatrix(entity);
+                object.baseColor = material != nullptr ? material->baseColor
+                                                       : Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+                const Vec3 specular = material != nullptr ? material->specular : Vec3{0.25f};
+                const f32 specularStrength = Max(specular.x, Max(specular.y, specular.z));
+                object.params = Vec4(material != nullptr ? material->shininess : 48.0f,
+                                     specularStrength, 0.0f, 0.0f);
+
+                if (material != nullptr && material->heap) commands.SetDescriptorHeap(*material->heap);
+
+                commands.PushConstants(&object, sizeof(ObjectData));
+                commands.SetVertexBuffer(*mesh.vertexBuffer);
+                commands.SetIndexBuffer(*mesh.indexBuffer);
+                commands.DrawIndexed(part.indexCount, part.firstIndex);
+
+                ++m_stats.drawCalls;
+                m_stats.triangles += part.indexCount / 3;
+            }
         });
+
+    m_stats.materials = static_cast<u32>(m_materials.size());
 
     commands.EndRenderPass();
     commands.End();

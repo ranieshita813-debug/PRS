@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LINUX_DEPS: >-
+    ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+    libx11-dev xorg-dev libgl1-mesa-dev
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux GCC",    os: ubuntu-latest,  cc: gcc,   cxx: g++ }
+          - { name: "Linux Clang",  os: ubuntu-latest,  cc: clang, cxx: clang++ }
+          - { name: "Windows MSVC", os: windows-latest }
+          - { name: "macOS Clang",  os: macos-latest }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Cache fetched dependencies (GLFW)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/glfw-src
+          key: deps-${{ runner.os }}-${{ hashFiles('PRS/CMake/Dependencies.cmake') }}
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >
+          cmake -S PRS -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DGLFW_BUILD_WAYLAND=OFF
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -S PRS -B build
+          -DCMAKE_CONFIGURATION_TYPES=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRS-${{ runner.os }}-${{ matrix.name == 'Linux Clang' && 'clang' || 'default' }}
+          path: |
+            build/bin/
+            build/Release/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  sanitizers:
+    name: Linux ASan + UBSan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+
+      - name: Configure
+        run: >
+          cmake -S PRS -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DGLFW_BUILD_WAYLAND=OFF
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+  thread-sanitizer:
+    name: Linux TSan (Jobs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+
+      - name: Configure
+        run: >
+          cmake -S PRS -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DGLFW_BUILD_WAYLAND=OFF
+          -DCMAKE_C_FLAGS="-fsanitize=thread"
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests under TSan
+        run: ctest --test-dir build --output-on-failure
+
+  format:
+    name: clang-format (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          find PRS/Engine PRS/Games PRS/Programs PRS/Tests \
+            \( -name '*.h' -o -name '*.cpp' \) \
+            -print0 |
+            xargs -0 -r clang-format --dry-run --Werror

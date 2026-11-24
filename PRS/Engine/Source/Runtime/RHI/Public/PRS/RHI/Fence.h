@@ -1,10 +1,17 @@
 #pragma once
-// PRS::RHI :: Fence  (L2)
-// STUB: replace with the real implementation when you reach this phase (see Docs/Roadmap.md).
+#include "PRS/RHI/Types.h"
+
 namespace PRS::RHI
 {
-struct Fence
+// GPU timeline synchronization point.
+class Fence
 {
-    static constexpr const char* Name() { return "RHI/Fence"; }
+public:
+    virtual ~Fence() = default;
+
+    // Blocks the CPU until the fence signals. timeoutNs = ~0ull waits forever.
+    virtual void Wait(u64 timeoutNs = ~0ull) = 0;
+    virtual void Reset() = 0;
+    virtual bool IsSignaled() const = 0;
 };
 } // namespace PRS::RHI

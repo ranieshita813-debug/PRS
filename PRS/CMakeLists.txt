@@ -33,3 +33,25 @@ if(PRS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(Tests)
 endif()
+
+# --- Shaders ----------------------------------------------------------------
+# Prebuilt SPIR-V lives in Engine/Shaders/Compiled and is copied next to the
+# binaries. When the Vulkan SDK's glslangValidator is available the shaders are
+# rebuilt from the .glsl sources on every build instead.
+set(PRS_SHADER_OUTPUT_DIR ${CMAKE_BINARY_DIR}/Shaders)
+file(GLOB PRS_PREBUILT_SHADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Compiled/*.spv)
+if(PRS_PREBUILT_SHADERS)
+    file(COPY ${PRS_PREBUILT_SHADERS} DESTINATION ${PRS_SHADER_OUTPUT_DIR})
+endif()
+
+if(GLSLANG_VALIDATOR)
+    add_custom_target(PRS_Shaders
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${PRS_SHADER_OUTPUT_DIR}
+        COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -o ${PRS_SHADER_OUTPUT_DIR}/forward.vert.spv ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Forward.vert.glsl
+        COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -o ${PRS_SHADER_OUTPUT_DIR}/forward.frag.spv ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Forward.frag.glsl
+        COMMENT "Compiling PRS forward shaders"
+        VERBATIM)
+    if(TARGET MyOpenWorld)
+        add_dependencies(MyOpenWorld PRS_Shaders)
+    endif()
+endif()

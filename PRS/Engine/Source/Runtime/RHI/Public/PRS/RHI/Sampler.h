@@ -1,10 +1,11 @@
 #pragma once
-// PRS::RHI :: Sampler  (L2)
-// STUB: replace with the real implementation when you reach this phase (see Docs/Roadmap.md).
+#include "PRS/RHI/Types.h"
+
 namespace PRS::RHI
 {
-struct Sampler
+class Sampler
 {
-    static constexpr const char* Name() { return "RHI/Sampler"; }
+public:
+    virtual ~Sampler() = default;
 };
 } // namespace PRS::RHI

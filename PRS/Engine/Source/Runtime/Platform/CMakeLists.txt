@@ -10,3 +10,10 @@ if(ANDROID)
 else()
     prs_add_module(Platform DEPS_PUBLIC PRS::Core DEPS_PRIVATE glfw)
 endif()
+
+# VulkanSurface.cpp needs the Vulkan headers to create a VkSurfaceKHR; without
+# them the file compiles its fallback (no surface, rendering disabled).
+if(Vulkan_FOUND)
+    target_compile_definitions(PRS_Platform PRIVATE PRS_HAS_VULKAN=1)
+    target_link_libraries(PRS_Platform PRIVATE Vulkan::Vulkan)
+endif()

@@ -10,6 +10,20 @@ if(NOT ANDROID)
     FetchContent_MakeAvailable(glfw)
 endif()
 
+# --- Vulkan (loader + headers). The Vulkan SDK sets VULKAN_SDK. --------------
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    message(STATUS "PRS: Vulkan ${Vulkan_VERSION} found at ${Vulkan_INCLUDE_DIR}")
+endif()
+
+# --- Shader compiler: the Vulkan SDK ships glslangValidator ------------------
+find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslangValidator.exe)
+if(GLSLANG_VALIDATOR)
+    message(STATUS "PRS: shaders will be rebuilt with ${GLSLANG_VALIDATOR}")
+else()
+    message(STATUS "PRS: glslangValidator not found - using Engine/Shaders/Compiled/*.spv")
+endif()
+
 # Android uses ANativeWindow + android_native_app_glue (see Engine/Source/Runtime/Platform).
 
 # Later phases (uncomment as you reach them):

@@ -1,10 +1,19 @@
 #pragma once
-// PRS::RHI :: Queue  (L2)
-// STUB: replace with the real implementation when you reach this phase (see Docs/Roadmap.md).
+#include "PRS/RHI/Types.h"
+
 namespace PRS::RHI
 {
-struct Queue
+class CommandList;
+class Fence;
+
+class Queue
 {
-    static constexpr const char* Name() { return "RHI/Queue"; }
+public:
+    virtual ~Queue() = default;
+
+    // Submits an already recorded command list. Offscreen/upload work uses this;
+    // presentable frames go through SwapChain::Submit.
+    virtual void Submit(CommandList& commandList, Fence* signalFence = nullptr) = 0;
+    virtual void WaitIdle() = 0;
 };
 } // namespace PRS::RHI

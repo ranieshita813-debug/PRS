@@ -71,6 +71,32 @@ TEST(Transform_ComposesLikeMatrices)
     CHECK(NearlyEqual(viaMatrix.z, viaTransforms.z, 1.0e-4f));
 }
 
+TEST(Mat4_LookAtMapsTheCameraFrameCorrectly)
+{
+    const Vec3 eye{3.0f, 2.0f, -4.0f};
+    const Vec3 target{1.0f, 0.5f, 2.0f};
+    const Mat4 view = Mat4::LookAt(eye, target, AxisY());
+
+    const Vec3 viewSpaceEye = (view * Vec4{eye, 1.0f}).XYZ();
+    CHECK(NearlyEqual(viewSpaceEye.x, 0.0f, 1.0e-4f));
+    CHECK(NearlyEqual(viewSpaceEye.y, 0.0f, 1.0e-4f));
+    CHECK(NearlyEqual(viewSpaceEye.z, 0.0f, 1.0e-4f));
+
+    // The target sits straight ahead, down the negative z axis.
+    const Vec3 viewSpaceTarget = (view * Vec4{target, 1.0f}).XYZ();
+    CHECK(NearlyEqual(viewSpaceTarget.x, 0.0f, 1.0e-4f));
+    CHECK(NearlyEqual(viewSpaceTarget.y, 0.0f, 1.0e-4f));
+    CHECK(viewSpaceTarget.z < 0.0f);
+    CHECK(NearlyEqual(viewSpaceTarget.z, -Distance(eye, target), 1.0e-4f));
+
+    // Moving along the camera's right axis moves the point along +x only.
+    const Vec3 forward = Normalize(target - eye);
+    const Vec3 right = Normalize(Cross(forward, AxisY()));
+    const Vec3 viewSpaceRight = (view * Vec4{eye + right * 2.0f, 1.0f}).XYZ();
+    CHECK(NearlyEqual(viewSpaceRight.x, 2.0f, 1.0e-4f));
+    CHECK(NearlyEqual(viewSpaceRight.y, 0.0f, 1.0e-4f));
+}
+
 TEST(Mat4_PerspectiveMapsDepthToZeroOne)
 {
     const Mat4 projection = Mat4::Perspective(Radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);

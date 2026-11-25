@@ -49,6 +49,7 @@ if(GLSLANG_VALIDATOR)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${PRS_SHADER_OUTPUT_DIR}
         COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -o ${PRS_SHADER_OUTPUT_DIR}/forward.vert.spv ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Forward.vert.glsl
         COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -o ${PRS_SHADER_OUTPUT_DIR}/forward.frag.spv ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Forward.frag.glsl
+        COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -o ${PRS_SHADER_OUTPUT_DIR}/shadow.vert.spv ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Shaders/Shadow.vert.glsl
         COMMENT "Compiling PRS forward shaders"
         VERBATIM)
     if(TARGET MyOpenWorld)

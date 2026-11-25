@@ -5,6 +5,35 @@
 
 namespace PRS::RHI::Vulkan
 {
+namespace
+{
+// Textures made with Device::CreateTexture have no framebuffer; the swapchain
+// builds its own. Depth-only targets (shadow maps) get theirs here on first use.
+VkFramebuffer EnsureFramebuffer(DeviceImpl& device, TextureImpl& texture, VkRenderPass renderPass)
+{
+    if (texture.framebuffer != VK_NULL_HANDLE) return texture.framebuffer;
+
+    VkFramebufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    info.renderPass = renderPass;
+    info.attachmentCount = 1;
+    info.pAttachments = &texture.view;
+    info.width = texture.extent.width;
+    info.height = texture.extent.height;
+    info.layers = 1;
+
+    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    if (vkCreateFramebuffer(device.device, &info, nullptr, &framebuffer) != VK_SUCCESS)
+    {
+        PRS_ERROR("vkCreateFramebuffer failed for a %ux%u target", texture.extent.width,
+                  texture.extent.height);
+        return VK_NULL_HANDLE;
+    }
+    texture.framebuffer = framebuffer;
+    return framebuffer;
+}
+} // namespace
+
 CommandListImpl::~CommandListImpl()
 {
     if (owner != nullptr && owner->device != VK_NULL_HANDLE && commandBuffer != VK_NULL_HANDLE)
@@ -35,35 +64,52 @@ void CommandListImpl::End()
 
 void CommandListImpl::BeginRenderPass(const RenderPassDesc& desc)
 {
-    if (!recording || desc.color == nullptr) return;
+    if (!recording) return;
 
-    auto* color = static_cast<TextureImpl*>(desc.color);
+    auto* color = desc.color != nullptr ? static_cast<TextureImpl*>(desc.color) : nullptr;
     auto* depth = desc.depth != nullptr ? static_cast<TextureImpl*>(desc.depth) : nullptr;
+    if (color == nullptr && depth == nullptr) return;
 
-    VkRenderPass renderPass = color->renderPass;
+    const TextureImpl& extentSource = color != nullptr ? *color : *depth;
+
+    VkRenderPass renderPass = color != nullptr ? color->renderPass : VK_NULL_HANDLE;
     if (renderPass == VK_NULL_HANDLE)
-        renderPass = owner->GetOrCreateRenderPass(color->format,
-                                                  depth != nullptr ? depth->format
-                                                                   : Format::Undefined);
+        renderPass = owner->GetOrCreateRenderPass(
+            color != nullptr ? color->format : Format::Undefined,
+            depth != nullptr ? depth->format : Format::Undefined);
     if (renderPass == VK_NULL_HANDLE) return;
 
-    const Extent2D extent = color->extent;
+    VkFramebuffer framebuffer = color != nullptr ? color->framebuffer : VK_NULL_HANDLE;
+    if (framebuffer == VK_NULL_HANDLE && depth != nullptr)
+        framebuffer = EnsureFramebuffer(*owner, *depth, renderPass);
+    if (framebuffer == VK_NULL_HANDLE) return;
+
+    const Extent2D extent = extentSource.extent;
 
     VkClearValue clearValues[2]{};
-    clearValues[0].color.float32[0] = desc.clearColorValue[0];
-    clearValues[0].color.float32[1] = desc.clearColorValue[1];
-    clearValues[0].color.float32[2] = desc.clearColorValue[2];
-    clearValues[0].color.float32[3] = desc.clearColorValue[3];
-    clearValues[1].depthStencil.depth = desc.clearDepthValue;
-    clearValues[1].depthStencil.stencil = 0;
+    u32 clearCount = 0;
+    if (color != nullptr)
+    {
+        clearValues[clearCount].color.float32[0] = desc.clearColorValue[0];
+        clearValues[clearCount].color.float32[1] = desc.clearColorValue[1];
+        clearValues[clearCount].color.float32[2] = desc.clearColorValue[2];
+        clearValues[clearCount].color.float32[3] = desc.clearColorValue[3];
+        ++clearCount;
+    }
+    if (depth != nullptr)
+    {
+        clearValues[clearCount].depthStencil.depth = desc.clearDepthValue;
+        clearValues[clearCount].depthStencil.stencil = 0;
+        ++clearCount;
+    }
 
     VkRenderPassBeginInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     info.renderPass = renderPass;
-    info.framebuffer = color->framebuffer;
+    info.framebuffer = framebuffer;
     info.renderArea.offset = {0, 0};
     info.renderArea.extent = {extent.width, extent.height};
-    info.clearValueCount = depth != nullptr ? 2u : 1u;
+    info.clearValueCount = clearCount;
     info.pClearValues = clearValues;
 
     vkCmdBeginRenderPass(commandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);

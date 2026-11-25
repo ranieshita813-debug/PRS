@@ -9,6 +9,7 @@
 #include "PRS/RHI/Device.h"
 #include "PRS/RHI/Pipeline.h"
 #include "PRS/RHI/SwapChain.h"
+#include "PRS/Renderer/Shadow.h"
 #include "PRS/Scene/Scene.h"
 #include <string>
 
@@ -51,13 +52,15 @@ struct Material
     Scope<RHI::DescriptorHeap> heap;
 };
 
-// Uniform block, layout must match CameraBlock in the shaders (112 bytes).
+// Uniform block, layout must match CameraBlock in the shaders (192 bytes).
 struct CameraData
 {
     Mat4 viewProjection;
+    Mat4 lightViewProjection; // sun camera used to render and sample the shadow map
     Vec4 cameraPosition;
     Vec4 lightDirection;
     Vec4 lightColor;
+    Vec4 shadowParams; // x = 1/map size, y = depth bias, z = normal bias, w = 1 when on
 };
 
 // Push constant block, layout must match ObjectBlock (96 bytes, the guaranteed
@@ -69,12 +72,22 @@ struct ObjectData
     Vec4 params; // x = specular exponent, y = specular strength
 };
 
+// Push constant block for the depth-only shadow pass (128 bytes, the largest
+// guaranteed size). It carries the sun matrix so the pass needs no descriptors.
+struct ShadowObjectData
+{
+    Mat4 lightViewProjection;
+    Mat4 model;
+};
+
 struct RenderStats
 {
     u32 drawCalls = 0;
     u32 triangles = 0;
     u32 meshes = 0;
     u32 materials = 0;
+    u32 shadowCasters = 0;
+    u32 shadowDrawCalls = 0;
     u32 frame = 0;
 };
 
@@ -84,6 +97,12 @@ struct RendererConfig
     f32 clearColor[4] = {0.09f, 0.11f, 0.16f, 1.0f};
     f32 ambientIntensity = 0.18f;
     bool wireframe = false; // ignored by the first pipeline (fill mode is fixed)
+
+    // One directional shadow map shared by every light in the scene.
+    bool shadowsEnabled = true;
+    u32 shadowMapSize = 2048;
+    f32 shadowBias = 0.0015f;      // depth bias against acne
+    f32 shadowNormalBias = 0.02f;  // world-space offset along the normal
 };
 
 // Forward renderer: clears the swapchain, draws every MeshRenderer entity in the
@@ -93,6 +112,10 @@ struct RendererConfig
 // pipeline (.obj files resolved through Assets()). Materials carry an optional
 // albedo texture; MeshRenderer::material overrides the mesh's own material and
 // is treated as a texture path.
+//
+// Shadowing: each frame renders the scene depth from the sun into a 2048x2048
+// depth image, then the forward pass compares every fragment against it with
+// 3x3 PCF. Entities with MeshRenderer::castShadows == false are skipped.
 class Renderer
 {
 public:
@@ -138,7 +161,10 @@ public:
 private:
     bool CreatePipeline();
     bool CreateFrameResources();
+    bool CreateShadowPipeline();
     std::string FindShader(const char* name) const;
+    ShadowBounds ComputeShadowBounds(Scene::Scene& scene) const;
+    RHI::Texture* ShadowTexture() const;
     Mesh& CreateMeshFromData(std::string_view name, const Assets::MeshData& data);
     Material* CreateMaterial(const Assets::MaterialData& data, const String& key);
     void AddDefaultSearchPaths();
@@ -148,6 +174,11 @@ private:
     RendererConfig m_config;
 
     Scope<RHI::Pipeline> m_pipeline;
+    Scope<RHI::Pipeline> m_shadowPipeline;
+    Scope<RHI::Texture> m_shadowMap;
+    Scope<RHI::Sampler> m_shadowSampler;
+    bool m_shadowsActive = false;
+    bool m_shadowMapWritten = false;
     Scope<RHI::Buffer> m_cameraBuffer;
     Scope<RHI::DescriptorHeap> m_frameHeap;
     Scope<RHI::CommandList> m_commandList;
@@ -162,6 +193,7 @@ private:
 
     std::string m_vertexShaderPath;
     std::string m_fragmentShaderPath;
+    std::string m_shadowShaderPath;
     RenderStats m_stats;
     bool m_initialized = false;
     u64 m_frameCounter = 0;

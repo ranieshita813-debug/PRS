@@ -89,6 +89,7 @@ void Renderer::SetShaderDirectory(std::string directory)
     {
         m_vertexShaderPath = FindShader("forward.vert.spv");
         m_fragmentShaderPath = FindShader("forward.frag.spv");
+        m_shadowShaderPath = FindShader("shadow.vert.spv");
     }
 }
 
@@ -113,6 +114,7 @@ bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
 
     m_vertexShaderPath = FindShader("forward.vert.spv");
     m_fragmentShaderPath = FindShader("forward.frag.spv");
+    m_shadowShaderPath = FindShader("shadow.vert.spv");
 
     if (!CreatePipeline()) return false;
     if (!CreateFrameResources()) return false;
@@ -130,8 +132,22 @@ bool Renderer::Initialize(RHI::Device& device, RHI::SwapChain& swapchain,
 
     m_defaultSampler = device.CreateSampler(RHI::SamplerDesc{});
 
+    // The shadow map exists before any material, because every material
+    // descriptor set binds it at set 0 binding 2.
+    m_shadowsActive = CreateShadowPipeline();
+    if (!m_shadowsActive && m_config.shadowsEnabled)
+        PRS_WARN("Renderer: directional shadows disabled (%s missing or the depth pass failed)",
+                 m_shadowShaderPath.c_str());
+
     if (m_frameHeap && m_whiteTexture && m_defaultSampler)
+    {
         m_frameHeap->SetCombinedImageSampler(1, *m_whiteTexture, *m_defaultSampler);
+        RHI::Texture* shadowTexture = ShadowTexture();
+        RHI::Sampler* shadowSampler =
+            m_shadowSampler ? m_shadowSampler.get() : m_defaultSampler.get();
+        if (shadowTexture != nullptr && shadowSampler != nullptr)
+            m_frameHeap->SetCombinedImageSampler(2, *shadowTexture, *shadowSampler);
+    }
 
     Assets::MaterialData defaultMaterial;
     m_defaultMaterial = GetOrCreateMaterial(defaultMaterial);
@@ -173,6 +189,109 @@ bool Renderer::CreatePipeline()
     return true;
 }
 
+bool Renderer::CreateShadowPipeline()
+{
+    if (!m_config.shadowsEnabled || m_device == nullptr) return false;
+
+    const u32 size = m_config.shadowMapSize > 0 ? m_config.shadowMapSize : 2048;
+
+    RHI::TextureDesc mapDesc;
+    mapDesc.size = {size, size};
+    mapDesc.format = RHI::Format::Depth32Float;
+    mapDesc.usage = RHI::TextureUsage::DepthStencil | RHI::TextureUsage::Sampled;
+    mapDesc.debugName = "ShadowMap";
+    m_shadowMap = m_device->CreateTexture(mapDesc);
+    if (!m_shadowMap) return false;
+
+    // Nearest filtering: the fragment shader does the depth comparison itself,
+    // and clamping keeps lookups outside the map from wrapping around.
+    RHI::SamplerDesc samplerDesc;
+    samplerDesc.minFilter = RHI::Filter::Nearest;
+    samplerDesc.magFilter = RHI::Filter::Nearest;
+    samplerDesc.addressU = RHI::AddressMode::ClampToEdge;
+    samplerDesc.addressV = RHI::AddressMode::ClampToEdge;
+    samplerDesc.addressW = RHI::AddressMode::ClampToEdge;
+    samplerDesc.anisotropy = false;
+    samplerDesc.maxLod = 0.0f;
+    m_shadowSampler = m_device->CreateSampler(samplerDesc);
+    if (!m_shadowSampler)
+    {
+        m_shadowMap.reset();
+        return false;
+    }
+
+    RHI::GraphicsPipelineDesc desc;
+    desc.vertexShaderPath = m_shadowShaderPath.c_str();
+    desc.fragmentShaderPath = nullptr; // depth-only pass, nothing is shaded
+    desc.colorFormat = RHI::Format::Undefined;
+    desc.depthFormat = RHI::Format::Depth32Float;
+    // Culling front faces and drawing backs keeps the recorded depth just
+    // behind lit surfaces, which removes most shadow acne.
+    desc.cullMode = RHI::CullMode::Front;
+    desc.depthTest = true;
+    desc.depthWrite = true;
+    desc.alphaBlend = false;
+    desc.pushConstantSize = static_cast<u32>(sizeof(ShadowObjectData));
+    desc.debugName = "ShadowDepth";
+
+    desc.vertexBinding.stride = static_cast<u32>(sizeof(Vertex));
+    desc.vertexBinding.attributes = {
+        {0, RHI::VertexFormat::Float3, static_cast<u32>(offsetof(Vertex, position))},
+        {1, RHI::VertexFormat::Float3, static_cast<u32>(offsetof(Vertex, normal))},
+        {2, RHI::VertexFormat::Float2, static_cast<u32>(offsetof(Vertex, uv))},
+    };
+
+    m_shadowPipeline = m_device->CreateGraphicsPipeline(desc);
+    if (!m_shadowPipeline)
+    {
+        m_shadowMap.reset();
+        m_shadowSampler.reset();
+        return false;
+    }
+
+    m_shadowMapWritten = false;
+    PRS_INFO("Renderer: directional shadow map %ux%u", size, size);
+    return true;
+}
+
+RHI::Texture* Renderer::ShadowTexture() const
+{
+    if (m_shadowsActive && m_shadowMap) return m_shadowMap.get();
+    return m_whiteTexture ? m_whiteTexture.get() : nullptr;
+}
+
+ShadowBounds Renderer::ComputeShadowBounds(Scene::Scene& scene) const
+{
+    Vec3 minimum{1.0e30f, 1.0e30f, 1.0e30f};
+    Vec3 maximum{-1.0e30f, -1.0e30f, -1.0e30f};
+    bool any = false;
+
+    scene.World().Query<Sc::Transform, Sc::MeshRenderer>().ForEach(
+        [&](ECS::Entity entity, Sc::Transform&, Sc::MeshRenderer& meshRenderer) {
+            if (!meshRenderer.visible || !meshRenderer.castShadows) return;
+
+            const Mat4 world = scene.WorldMatrix(entity);
+            const Vec3 center = world.TranslationPart();
+
+            // Built-in meshes are unit sized, so the world-space scale gives a
+            // usable half extent without walking the vertices.
+            const f32 sx = Length(world.Column(0));
+            const f32 sy = Length(world.Column(1));
+            const f32 sz = Length(world.Column(2));
+            f32 extent = sx > sy ? sx : sy;
+            if (sz > extent) extent = sz;
+            extent *= 0.75f;
+
+            const Vec3 half{extent, extent, extent};
+            minimum = Min(minimum, center - half);
+            maximum = Max(maximum, center + half);
+            any = true;
+        });
+
+    if (!any) return ShadowBounds{};
+    return MakeShadowBounds(minimum, maximum);
+}
+
 bool Renderer::CreateFrameResources()
 {
     RHI::BufferDesc cameraDesc;
@@ -204,6 +323,11 @@ void Renderer::Shutdown()
     m_commandList.reset();
     m_frameHeap.reset();
     m_cameraBuffer.reset();
+    m_shadowPipeline.reset();
+    m_shadowMap.reset();
+    m_shadowSampler.reset();
+    m_shadowsActive = false;
+    m_shadowMapWritten = false;
     m_pipeline.reset();
     m_whiteTexture.reset();
     m_defaultSampler.reset();
@@ -254,6 +378,12 @@ Material* Renderer::CreateMaterial(const Assets::MaterialData& data, const Strin
         RHI::Texture* texture = material->albedo ? material->albedo.get() : m_whiteTexture.get();
         if (texture != nullptr && m_defaultSampler != nullptr)
             material->heap->SetCombinedImageSampler(1, *texture, *m_defaultSampler);
+
+        RHI::Texture* shadowTexture = ShadowTexture();
+        RHI::Sampler* shadowSampler =
+            m_shadowSampler ? m_shadowSampler.get() : m_defaultSampler.get();
+        if (shadowTexture != nullptr && shadowSampler != nullptr)
+            material->heap->SetCombinedImageSampler(2, *shadowTexture, *shadowSampler);
     }
 
     Material* stored = material.get();
@@ -440,12 +570,79 @@ void Renderer::Render(Scene::Scene& scene, ECS::Entity cameraEntity, f32 elapsed
     cameraData.lightDirection = Vec4(lightDirection, 0.0f);
     cameraData.lightColor = Vec4(lightColor, 1.0f);
 
+    // --- Shadows ------------------------------------------------------------
+    // Fit the sun's orthographic camera around every caster in the scene and
+    // hand the same matrix to the shader that sampled the depth pass.
+    const ShadowBounds shadowBounds = ComputeShadowBounds(scene);
+    const Mat4 lightViewProjection = MakeDirectionalLightMatrix(
+        lightDirection, shadowBounds, shadowBounds.radius * 0.5f + 5.0f);
+    cameraData.lightViewProjection = lightViewProjection;
+
+    const f32 shadowMapSize = m_shadowMap && m_shadowMap->Size().width > 0
+                                  ? static_cast<f32>(m_shadowMap->Size().width)
+                                  : 1.0f;
+    cameraData.shadowParams =
+        Vec4(1.0f / shadowMapSize, m_config.shadowBias, m_config.shadowNormalBias,
+             m_shadowsActive ? 1.0f : 0.0f);
+
     if (m_cameraBuffer && m_cameraBuffer->MappedPointer() != nullptr)
         std::memcpy(m_cameraBuffer->MappedPointer(), &cameraData, sizeof(CameraData));
 
     // --- Record -------------------------------------------------------------
     RHI::CommandList& commands = *m_commandList;
     commands.Begin();
+
+    // --- Depth pass ---------------------------------------------------------
+    if (m_shadowsActive && m_shadowPipeline && m_shadowMap)
+    {
+        RHI::Barrier toDepth;
+        toDepth.before = m_shadowMapWritten ? RHI::ResourceState::ShaderRead
+                                            : RHI::ResourceState::Undefined;
+        toDepth.after = RHI::ResourceState::DepthTarget;
+        toDepth.texture = m_shadowMap.get();
+        commands.Barrier(toDepth);
+
+        RHI::RenderPassDesc shadowPass;
+        shadowPass.color = nullptr; // depth-only render pass
+        shadowPass.depth = m_shadowMap.get();
+        shadowPass.clearDepth = true;
+        commands.BeginRenderPass(shadowPass);
+        commands.SetPipeline(*m_shadowPipeline);
+
+        scene.World().Query<Sc::Transform, Sc::MeshRenderer>().ForEach(
+            [&](ECS::Entity entity, Sc::Transform&, Sc::MeshRenderer& meshRenderer) {
+                if (!meshRenderer.visible || !meshRenderer.castShadows) return;
+
+                Mesh& mesh = GetOrCreateMesh(meshRenderer.mesh);
+                if (!mesh.vertexBuffer || !mesh.indexBuffer) return;
+
+                ShadowObjectData object{};
+                object.lightViewProjection = lightViewProjection;
+                object.model = scene.WorldMatrix(entity);
+
+                commands.PushConstants(&object, sizeof(ShadowObjectData));
+                commands.SetVertexBuffer(*mesh.vertexBuffer);
+                commands.SetIndexBuffer(*mesh.indexBuffer);
+
+                for (const MeshPart& part : mesh.parts)
+                {
+                    if (part.indexCount == 0) continue;
+                    commands.DrawIndexed(part.indexCount, part.firstIndex);
+                    ++m_stats.shadowDrawCalls;
+                }
+                ++m_stats.shadowCasters;
+            });
+
+        commands.EndRenderPass();
+
+        RHI::Barrier toSample;
+        toSample.before = RHI::ResourceState::DepthTarget;
+        toSample.after = RHI::ResourceState::ShaderRead;
+        toSample.texture = m_shadowMap.get();
+        commands.Barrier(toSample);
+
+        m_shadowMapWritten = true;
+    }
 
     RHI::RenderPassDesc pass;
     pass.color = &color;

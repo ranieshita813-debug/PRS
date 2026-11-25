@@ -25,12 +25,39 @@ same `PRS::RHI` interfaces.
    camera is used.
 3. Lighting: the first directional `Light` in the scene, direction taken from its
    transform's forward axis; colour and intensity feed the shading term.
-4. `CommandList::Begin` → `BeginRenderPass` (clear colour + depth) →
+4. Shadows: `CommandList::Begin` → barrier → depth-only `BeginRenderPass` into the
+   shadow map → `SetPipeline` + per mesh `PushConstants(ShadowObjectData)` +
+   `DrawIndexed` → `EndRenderPass` → barrier to `SHADER_READ_ONLY_OPTIMAL`.
+5. `BeginRenderPass` (clear colour + depth) →
    `SetPipeline` + `SetDescriptorHeap` (camera UBO) → per mesh
    `PushConstants(ObjectData)` + `SetVertexBuffer` + `SetIndexBuffer` +
    `DrawIndexed` → `EndRenderPass` → `End`.
-5. `SwapChain::Submit` (waits imageAvailable, signals renderFinished) and
+6. `SwapChain::Submit` (waits imageAvailable, signals renderFinished) and
    `Present`.
+
+## Directional shadows
+
+One 2048x2048 `D32_SFLOAT` depth image is shared by the frame (configurable with
+`RendererConfig::shadowMapSize`).
+
+- **Fitting** (`Renderer/Public/PRS/Renderer/Shadow.h`): the casters' world
+  positions give an axis-aligned box, which becomes a bounding sphere. The sun's
+  camera is an orthographic projection of that sphere, `radius + padding` behind
+  the centre along the light direction. A sphere keeps the map stable as the
+  camera moves; fitting the *view frustum* instead makes shadows shimmer.
+- **Depth pass**: a depth-only pipeline (`shadow.vert.spv`) with front-face
+  culling and no fragment stage, so only the far side of each mesh is recorded
+  and lit surfaces do not fight the map. Entities with
+  `MeshRenderer::castShadows == false` (the ground plane in the demo) are skipped.
+- **Lookup**: `Forward.frag.glsl` projects the world position with the same
+  `lightViewProjection`, adds a normal offset and a depth bias, and averages nine
+  depth comparisons (3x3 PCF). Samples outside `[0, 1]` count as lit. Ambient is
+  not shadowed; diffuse and specular are.
+- **Playback**: `MeshRenderer::castShadows`, `RendererConfig::shadowsEnabled`,
+  `shadowBias` and `shadowNormalBias`. `RenderStats::shadowCasters` and
+  `shadowDrawCalls` report the pass cost. If `shadow.vert.spv` is missing or the
+  depth pipeline cannot be created, the renderer logs a warning and disables
+  shadows instead of failing.
 
 ## Meshes and materials
 
@@ -57,6 +84,8 @@ so a multi-material model costs one draw call per material but one buffer pair.
 - `ImageLoader`: decodes uncompressed/RLE TGA (8/24/32-bit) and uncompressed
   24/32-bit BMP to RGBA8. Both are dependency-free; PNG/JPEG need a library and
   are the next step.
+- `Shadow.h` fits the sun's orthographic matrix around the casters; it only needs
+  the Core math, so the unit tests cover it without a GPU.
 - Textures upload as `RGBA8_UNORM` with one mip level; the shader decodes sRGB
   with `pow(2.2)`, so lighting stays linear.
 
@@ -69,8 +98,15 @@ so a multi-material model costs one draw call per material but one buffer pair.
 - Albedo (set 0, binding 1): combined image sampler. Untextured materials bind
   a 1x1 white texture so the shader has a single path. Each material owns its
   own descriptor set (camera UBO + its texture).
-- Camera UBO (set 0, binding 0): `mat4 viewProjection; vec4 cameraPosition;
-  vec4 lightDirection; vec4 lightColor;` (112 bytes).
+- Shadow map (set 0, binding 2): combined image sampler of the depth image,
+  nearest filtering and clamp-to-edge. The comparison happens in the shader, so
+  no comparison sampler is needed.
+- Camera UBO (set 0, binding 0): `mat4 viewProjection; mat4 lightViewProjection;
+  vec4 cameraPosition; vec4 lightDirection; vec4 lightColor; vec4 shadowParams;`
+  (192 bytes). `shadowParams` = `1/mapSize`, depth bias, normal bias, on/off.
+- Shadow push constants: `mat4 lightViewProjection; mat4 model;` (128 bytes, the
+  guaranteed maximum). Carrying the sun matrix here keeps the depth pass free of
+  descriptors.
 - Object push constants: `mat4 model; vec4 baseColor; vec4 params;` (96 bytes,
   the guaranteed Vulkan minimum). `params.x` is the specular exponent,
   `params.y` the specular strength.
@@ -84,20 +120,23 @@ so a multi-material model costs one draw call per material but one buffer pair.
 - Semaphores: `imageAvailable` (acquire → render) and `renderFinished`
   (render → present).
 - Render passes use `UNDEFINED` initial layouts, so each frame discards the
-  previous contents and Vulkan inserts the needed transitions.
+  previous contents and Vulkan inserts the needed transitions. The shadow map is
+  the exception: it is transitioned explicitly (`SHADER_READ` → `DEPTH_TARGET` →
+  `SHADER_READ`) because it is a depth image read as a texture straight after the
+  pass that writes it.
 
 ## Shaders
 
-- Sources: `Engine/Shaders/Forward.vert.glsl`, `Forward.frag.glsl` (GLSL 450,
-  Vulkan target).
-- Prebuilt SPIR-V: `Engine/Shaders/Compiled/forward.{vert,frag}.spv`, copied next
-  to the binaries at configure time.
+- Sources: `Engine/Shaders/Forward.vert.glsl`, `Forward.frag.glsl`,
+  `Shadow.vert.glsl` (GLSL 450, Vulkan target).
+- Prebuilt SPIR-V: `Engine/Shaders/Compiled/{forward.vert,forward.frag,shadow.vert}.spv`,
+  copied next to the binaries at configure time.
 - If the Vulkan SDK's `glslangValidator` is on `PATH`, the build regenerates the
   SPIR-V from the GLSL sources every time (`PRS_Shaders` target).
-- Shading is Lambert + Blinn-Phong with one directional light, Reinhard tonemap
-  and manual gamma. PBR (GGX), shadows, clustered lights and post-processing are
-  the next rendering steps; their stubs are already laid out under
-  `Renderer/Private/Passes`.
+- Shading is Lambert + Blinn-Phong with one directional light, a single 3x3 PCF
+  shadow map, Reinhard tonemap and manual gamma. PBR (GGX), cascaded shadows,
+  clustered lights and post-processing are the next rendering steps; their stubs
+  are already laid out under `Renderer/Private/Passes`.
 
 ## Running
 
@@ -115,8 +154,9 @@ the app logs that rendering is disabled).
 
 - Asset formats are OBJ/MTL and TGA/BMP; no glTF, PNG or JPEG yet, and no
   normal/specular maps or texture compression.
-- No shadows, PBR or offscreen targets (the render pass cache assumes a
-  swapchain colour target with `PRESENT_SRC` final layout).
+- One directional shadow map for the whole scene: no cascades, so detail drops
+  off when the casters span a large area, and a single map is regenerated every
+  frame. PBR and offscreen targets are still missing.
 - Box colliders are axis-aligned in physics; rotation is ignored by the
   narrowphase.
 - One frame in flight, hard synchronisation at the end of each frame.

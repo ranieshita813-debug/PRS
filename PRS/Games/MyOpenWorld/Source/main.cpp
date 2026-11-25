@@ -9,8 +9,9 @@ using namespace PRS;
 namespace Sc = PRS::Scene;
 
 // Demo scene for the forward Vulkan renderer: a textured ground plane, a
-// spinning cube, a textured sphere loaded from Models/sphere.obj, a sun and a
-// camera. WASD nudges the camera, ESC quits.
+// spinning cube, a textured sphere loaded from Models/sphere.obj, a sun that
+// casts a directional shadow map, and a camera. WASD nudges the camera, ESC
+// quits.
 class MyOpenWorldApp final : public Application
 {
 public:

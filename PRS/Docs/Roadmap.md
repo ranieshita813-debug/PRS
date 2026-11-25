@@ -5,7 +5,8 @@
    - RHI done: Vulkan instance/device selection, swapchain, buffers, textures,
      graphics pipelines, command lists, fences/semaphores.
    - Renderer done: forward pass with camera, one directional light, depth
-     buffer and present. PBR, shadows, render graph and offscreen targets remain.
+     buffer, textured materials, a 3x3 PCF directional shadow map and present.
+     PBR, cascaded shadows, render graph and offscreen targets remain.
 2. **Phase 2**: ECS, Assets + simple cooker, Scene, Editor basics (ImGui).
    - ECS done: entity generations, dense component pools, views, deferred commands, staged scheduler.
    - Scene done: hierarchy, camera/light/renderable components, text serializer, prefabs.

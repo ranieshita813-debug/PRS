@@ -21,7 +21,9 @@ Controls in the sample game: **ESC** quits, **WASD** moves the camera.
 
 The sample renders a lit scene through the Vulkan forward renderer: a textured
 ground plane, a spinning cube and a textured sphere loaded from
-`Games/MyOpenWorld/Assets/Models/sphere.obj` (OBJ + MTL + TGA). Shaders are
+`Games/MyOpenWorld/Assets/Models/sphere.obj` (OBJ + MTL + TGA), with a
+directional shadow map so the cube and sphere cast soft shadows on the ground.
+Shaders are
 compiled from `Engine/Shaders/*.glsl` by
 `glslangValidator` when the Vulkan SDK is installed, otherwise the prebuilt
 SPIR-V in `Engine/Shaders/Compiled` is copied next to the binaries.
@@ -40,7 +42,7 @@ SPIR-V in `Engine/Shaders/Compiled` is copied next to the binaries.
 | Engine (Application, fixed-timestep loop) | implemented |
 | UI (touch widgets, layout, scrolling, draw list, software rasterizer) | implemented |
 | RHI (Vulkan 1.1 backend: instance/device, swapchain, buffers, textures, pipelines, command lists, fences) | implemented |
-| Renderer (forward pass: camera, directional light, textured materials, mesh draws, depth buffer, present) | implemented, see [Docs/Rendering.md](Docs/Rendering.md) |
+| Renderer (forward pass: camera, directional light, textured materials, mesh draws, depth buffer, directional shadow map with PCF, present) | implemented, see [Docs/Rendering.md](Docs/Rendering.md) |
 | Assets (OBJ/MTL meshes, TGA/BMP textures, search-path cache) | implemented (textures/meshes), cooker and glTF still stubs |
 | Audio / Scripting / Network / World / AI | compiling stubs, see `Docs/Roadmap.md` |
 

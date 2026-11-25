@@ -99,10 +99,11 @@ struct Mat4
         right = Normalize(right);
         const Vec3 trueUp = Cross(right, forward);
 
+        // Rows of the view matrix are the basis vectors (column-major storage).
         Mat4 r;
-        r.At(0, 0) = right.x;    r.At(1, 0) = right.y;    r.At(2, 0) = right.z;
-        r.At(0, 1) = trueUp.x;   r.At(1, 1) = trueUp.y;   r.At(2, 1) = trueUp.z;
-        r.At(0, 2) = -forward.x; r.At(1, 2) = -forward.y; r.At(2, 2) = -forward.z;
+        r.At(0, 0) = right.x;    r.At(0, 1) = right.y;    r.At(0, 2) = right.z;
+        r.At(1, 0) = trueUp.x;   r.At(1, 1) = trueUp.y;   r.At(1, 2) = trueUp.z;
+        r.At(2, 0) = -forward.x; r.At(2, 1) = -forward.y; r.At(2, 2) = -forward.z;
         r.At(0, 3) = -Dot(right, eye);
         r.At(1, 3) = -Dot(trueUp, eye);
         r.At(2, 3) = Dot(forward, eye);

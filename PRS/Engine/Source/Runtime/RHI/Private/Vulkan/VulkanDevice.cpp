@@ -344,7 +344,7 @@ bool DeviceImpl::Initialize(const DeviceDesc& desc)
         return false;
     }
 
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -355,9 +355,15 @@ bool DeviceImpl::Initialize(const DeviceDesc& desc)
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Binding 2: the directional shadow map depth image.
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setLayoutInfo.bindingCount = 2;
+    setLayoutInfo.bindingCount = 3;
     setLayoutInfo.pBindings = bindings;
     result = vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &frameSetLayout);
     if (result != VK_SUCCESS)
@@ -427,28 +433,45 @@ VkRenderPass DeviceImpl::GetOrCreateRenderPass(Format colorFormat, Format depthF
     const auto existing = renderPassCache.find(key);
     if (existing != renderPassCache.end()) return existing->second;
 
+    const bool hasColor = colorFormat != Format::Undefined;
     const bool hasDepth = depthFormat != Format::Undefined;
+    if (!hasColor && !hasDepth) return VK_NULL_HANDLE;
 
+    // No colour attachment means the depth-only shadow pass. Its depth image is
+    // transitioned to the attachment layout by an explicit barrier before the
+    // pass and to shader-read after it, so both layouts here are the attachment
+    // layout rather than UNDEFINED.
     VkAttachmentDescription attachments[2]{};
-    attachments[0].format = ToVkFormat(colorFormat);
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    u32 attachmentCount = 0;
 
+    if (hasColor)
+    {
+        attachments[attachmentCount].format = ToVkFormat(colorFormat);
+        attachments[attachmentCount].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[attachmentCount].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[attachmentCount].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[attachmentCount].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[attachmentCount].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[attachmentCount].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[attachmentCount].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        ++attachmentCount;
+    }
+
+    const u32 depthAttachmentIndex = attachmentCount;
     if (hasDepth)
     {
-        attachments[1].format = ToVkFormat(depthFormat);
-        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments[attachmentCount].format = ToVkFormat(depthFormat);
+        attachments[attachmentCount].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[attachmentCount].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[attachmentCount].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[attachmentCount].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[attachmentCount].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[attachmentCount].initialLayout =
+            hasColor ? VK_IMAGE_LAYOUT_UNDEFINED
+                     : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments[attachmentCount].finalLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        ++attachmentCount;
     }
 
     VkAttachmentReference colorReference{};
@@ -456,28 +479,41 @@ VkRenderPass DeviceImpl::GetOrCreateRenderPass(Format colorFormat, Format depthF
     colorReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthReference{};
-    depthReference.attachment = 1;
+    depthReference.attachment = depthAttachmentIndex;
     depthReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorReference;
+    subpass.colorAttachmentCount = hasColor ? 1u : 0u;
+    subpass.pColorAttachments = hasColor ? &colorReference : nullptr;
     subpass.pDepthStencilAttachment = hasDepth ? &depthReference : nullptr;
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if (hasColor)
+    {
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask =
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    }
+    else
+    {
+        // Wait for the shadow map's previous shader reads before overwriting it.
+        dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    }
 
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = hasDepth ? 2u : 1u;
+    info.attachmentCount = attachmentCount;
     info.pAttachments = attachments;
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
@@ -752,22 +788,30 @@ Scope<DescriptorHeap> DeviceImpl::CreateDescriptorHeap()
 
 Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& desc)
 {
-    if (desc.vertexShaderPath == nullptr || desc.fragmentShaderPath == nullptr)
+    // A missing colour format marks a depth-only pipeline (the shadow pass): no
+    // fragment stage and no colour attachment, only depth writes.
+    const bool depthOnly = desc.colorFormat == Format::Undefined;
+    if (desc.vertexShaderPath == nullptr || (!depthOnly && desc.fragmentShaderPath == nullptr))
     {
-        PRS_ERROR("CreateGraphicsPipeline needs both shader paths");
+        PRS_ERROR("CreateGraphicsPipeline needs a vertex shader and, unless depth-only, a "
+                  "fragment shader");
         return nullptr;
     }
 
     VkShaderModule vertexModule = CreateShaderModule(device, desc.vertexShaderPath);
-    VkShaderModule fragmentModule = CreateShaderModule(device, desc.fragmentShaderPath);
-    if (vertexModule == VK_NULL_HANDLE || fragmentModule == VK_NULL_HANDLE) return nullptr;
+    VkShaderModule fragmentModule =
+        depthOnly ? VK_NULL_HANDLE : CreateShaderModule(device, desc.fragmentShaderPath);
+    if (vertexModule == VK_NULL_HANDLE || (!depthOnly && fragmentModule == VK_NULL_HANDLE))
+        return nullptr;
 
     auto pipeline = MakeScope<PipelineImpl>();
     pipeline->owner = this;
     pipeline->desc = desc;
 
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.stageFlags = depthOnly ? VK_SHADER_STAGE_VERTEX_BIT
+                                     : (VK_SHADER_STAGE_VERTEX_BIT |
+                                        VK_SHADER_STAGE_FRAGMENT_BIT);
     pushRange.offset = 0;
     pushRange.size = desc.pushConstantSize;
 
@@ -783,7 +827,8 @@ Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& d
     {
         PRS_ERROR("vkCreatePipelineLayout failed: %s", ResultName(result));
         vkDestroyShaderModule(device, vertexModule, nullptr);
-        vkDestroyShaderModule(device, fragmentModule, nullptr);
+        if (fragmentModule != VK_NULL_HANDLE)
+            vkDestroyShaderModule(device, fragmentModule, nullptr);
         return nullptr;
     }
 
@@ -792,10 +837,14 @@ Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& d
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vertexModule;
     stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragmentModule;
-    stages[1].pName = "main";
+    if (!depthOnly)
+    {
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fragmentModule;
+        stages[1].pName = "main";
+    }
+    const u32 stageCount = depthOnly ? 1u : 2u;
 
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
@@ -874,8 +923,8 @@ Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& d
 
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlend.attachmentCount = 1;
-    colorBlend.pAttachments = &colorAttachment;
+    colorBlend.attachmentCount = depthOnly ? 0u : 1u;
+    colorBlend.pAttachments = depthOnly ? nullptr : &colorAttachment;
 
     const VkDynamicState dynamicStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -888,7 +937,7 @@ Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& d
 
     VkGraphicsPipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.stageCount = 2;
+    info.stageCount = stageCount;
     info.pStages = stages;
     info.pVertexInputState = &vertexInput;
     info.pInputAssemblyState = &inputAssembly;
@@ -906,7 +955,7 @@ Scope<Pipeline> DeviceImpl::CreateGraphicsPipeline(const GraphicsPipelineDesc& d
                                        &pipeline->pipeline);
 
     vkDestroyShaderModule(device, vertexModule, nullptr);
-    vkDestroyShaderModule(device, fragmentModule, nullptr);
+    if (fragmentModule != VK_NULL_HANDLE) vkDestroyShaderModule(device, fragmentModule, nullptr);
 
     if (result != VK_SUCCESS)
     {
